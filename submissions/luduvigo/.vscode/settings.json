@@ -1,0 +1,18 @@
+{
+  "solidity.remappings": [
+    "forge-std/=lib/forge-std/src/"
+  ],
+  "solidity.packageDefaultDependenciesDirectory": "lib",
+  "solidity.compileUsingRemoteVersion": "v0.8.20",
+  "solidity.defaultCompiler": "localNodeModule",
+  "[solidity]": {
+    "editor.defaultFormatter": "JuanBlanco.solidity"
+  },
+  "search.exclude": {
+    "**/node_modules": true,
+    "**/packages/contracts/lib": true,
+    "**/packages/contracts/out": true,
+    "**/packages/contracts/cache": true
+  }
+}
+

@@ -53,11 +53,15 @@ export interface HistoricalApyRequest {
  */
 export async function getPoolHistoricalApy(
   poolAddress: string,
-  chain: string
+  chain: string,
+  retries: number = 2
 ): Promise<any> {
+  // Normalize pool address to lowercase (GlueX API may be case-sensitive)
+  const normalizedAddress = poolAddress.toLowerCase();
+  
   const requestData = {
-    pool_address: poolAddress,
-    chain: chain,
+    pool_address: normalizedAddress,
+    chain: chain.toLowerCase(),
   };
 
   console.log("Making GlueX API request:", {
@@ -65,6 +69,7 @@ export async function getPoolHistoricalApy(
     data: requestData,
   });
 
+  for (let attempt = 0; attempt <= retries; attempt++) {
   try {
     const response = await axios.post(
       `${GLUEX_YIELD_API_BASE}/historical-apy`,
@@ -72,40 +77,97 @@ export async function getPoolHistoricalApy(
       {
         headers: {
           "Content-Type": "application/json",
+            ...(ENV.GLUEX_API_KEY && { "X-API-Key": ENV.GLUEX_API_KEY }),
         },
+          timeout: 30000, // 30 second timeout
       }
     );
 
-    console.log("GlueX API response success for pool:", poolAddress);
+      console.log("GlueX API response success for pool:", poolAddress);
     return response.data;
   } catch (error) {
+      const isLastAttempt = attempt === retries;
+      
     if (axios.isAxiosError(error)) {
-      console.error("GlueX API Error Details:");
-      console.error("  Status:", error.response?.status);
-      console.error("  Status Text:", error.response?.statusText);
-      console.error(
-        "  Response Data:",
-        JSON.stringify(error.response?.data, null, 2)
-      );
+        const status = error.response?.status;
+        const statusText = error.response?.statusText;
+        const responseData = error.response?.data;
 
-      // Log validation details if present
-      if (error.response?.data?.detail) {
-        console.error(
-          "  Validation Errors:",
-          JSON.stringify(error.response.data.detail, null, 2)
-        );
+        console.error(`GlueX API Error (Attempt ${attempt + 1}/${retries + 1}):`);
+        console.error("  Pool:", poolAddress);
+        console.error("  Status:", status);
+        console.error("  Status Text:", statusText);
+        
+        if (responseData) {
+          console.error("  Response Data:", JSON.stringify(responseData, null, 2));
+
+          // Check for specific error types
+          if (status === 404) {
+            console.error("  Error Type: Pool not found or not supported by GlueX");
+          } else if (status === 422) {
+            console.error("  Error Type: Validation error - check pool address format");
+            if (responseData.detail) {
+              console.error("  Validation Details:", JSON.stringify(responseData.detail, null, 2));
+            }
+          } else if (status === 429) {
+            console.error("  Error Type: Rate limit exceeded - will retry");
+            if (!isLastAttempt) {
+              const waitTime = (attempt + 1) * 2000; // Exponential backoff
+              console.log(`  Waiting ${waitTime}ms before retry...`);
+              await new Promise(resolve => setTimeout(resolve, waitTime));
+              continue;
+            }
+          } else if (status && status >= 500) {
+            console.error("  Error Type: Server error - will retry");
+            if (!isLastAttempt) {
+              const waitTime = (attempt + 1) * 1000;
+              console.log(`  Waiting ${waitTime}ms before retry...`);
+              await new Promise(resolve => setTimeout(resolve, waitTime));
+              continue;
+            }
+          }
       }
 
       // Log the request that failed
-      console.error(
-        "  Failed Request Data:",
-        JSON.stringify(requestData, null, 2)
-      );
+        console.error("  Failed Request Data:", JSON.stringify(requestData, null, 2));
+        
+        if (isLastAttempt) {
+          throw new Error(
+            `Failed to fetch pool APY from GlueX after ${retries + 1} attempts. ` +
+            `Pool: ${poolAddress}, Status: ${status || 'Network Error'}, ` +
+            `Error: ${responseData?.detail || error.message || 'Unknown error'}`
+          );
+        }
+      } else if (error instanceof Error) {
+        // Network errors or timeouts
+        console.error("Non-Axios Error:", error.message);
+        if (error.message.includes('timeout')) {
+          console.error("  Error Type: Request timeout");
+          if (!isLastAttempt) {
+            const waitTime = (attempt + 1) * 1000;
+            console.log(`  Waiting ${waitTime}ms before retry...`);
+            await new Promise(resolve => setTimeout(resolve, waitTime));
+            continue;
+          }
+        }
+        
+        if (isLastAttempt) {
+          throw new Error(
+            `Failed to fetch pool APY from GlueX: ${poolAddress}. ` +
+            `Error: ${error.message}`
+          );
+        }
     } else {
-      console.error("Non-Axios Error:", error);
-    }
+        console.error("Unknown Error:", error);
+        if (isLastAttempt) {
     throw new Error(`Failed to fetch pool APY from GlueX: ${poolAddress}`);
   }
+      }
+    }
+  }
+  
+  // Should never reach here, but TypeScript needs it
+  throw new Error(`Failed to fetch pool APY from GlueX: ${poolAddress}`);
 }
 
 /**
@@ -256,14 +318,19 @@ export async function getBestYield(
  */
 export async function getPoolTvl(
   poolAddress: string,
-  chain: string
+  chain: string,
+  retries: number = 2
 ): Promise<any> {
+  // Normalize pool address to lowercase
+  const normalizedAddress = poolAddress.toLowerCase();
+  
   // Only send pool_address, not lp_token_address
   const requestData: any = {
-    pool_address: poolAddress,
-    chain: chain,
+    pool_address: normalizedAddress,
+    chain: chain.toLowerCase(),
   };
 
+  for (let attempt = 0; attempt <= retries; attempt++) {
   try {
     const headers: any = {
       "Content-Type": "application/json",
@@ -274,31 +341,51 @@ export async function getPoolTvl(
       headers["X-API-Key"] = ENV.GLUEX_API_KEY;
     }
 
-    // Debug: log the request data to verify it's correct
-    console.log(
-      `📊 Fetching TVL for pool ${poolAddress}, request data:`,
-      JSON.stringify(requestData)
-    );
-
     const response = await axios.post(
       `${GLUEX_YIELD_API_BASE}/tvl`,
       requestData,
-      { headers }
+        { 
+          headers,
+          timeout: 30000, // 30 second timeout
+        }
     );
 
     return response.data;
   } catch (error) {
+      const isLastAttempt = attempt === retries;
+      
     if (axios.isAxiosError(error)) {
+        const status = error.response?.status;
+        
+        // For rate limits or server errors, retry
+        if ((status === 429 || (status && status >= 500)) && !isLastAttempt) {
+          const waitTime = (attempt + 1) * 1000;
+          console.log(`TVL fetch failed for ${poolAddress}, retrying in ${waitTime}ms...`);
+          await new Promise(resolve => setTimeout(resolve, waitTime));
+          continue;
+        }
+        
+        // Log error but don't throw - allow graceful degradation
+        if (isLastAttempt) {
       console.error(
-        `Failed to fetch TVL for pool ${poolAddress}:`,
-        error.response?.data
+            `Failed to fetch TVL for pool ${poolAddress} after ${retries + 1} attempts:`,
+            error.response?.data || error.message
       );
+        }
     } else {
-      console.error(`Error fetching TVL for pool ${poolAddress}:`, error);
+        if (isLastAttempt) {
+          console.error(`Error fetching TVL for pool ${poolAddress}:`, error);
+        }
     }
-    // Return null instead of throwing to allow graceful degradation
+      
+      // Return null on final attempt to allow graceful degradation
+      if (isLastAttempt) {
     return null;
+      }
   }
+  }
+  
+  return null;
 }
 
 /**
